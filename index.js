@@ -6,11 +6,10 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 
 const app = express();
 
-// إعدادات CORS وتسهيل الاتصالات الخارجية
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', '*');
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
@@ -20,13 +19,11 @@ app.use(express.json());
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = token ? new TelegramBot(token, { polling: false }) : null;
 
-// تعريف خادم MCP
 const server = new Server(
   { name: 'research-mcp-server', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 
-// قائمة الأدوات المتاحة
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -43,7 +40,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'search_pubmed',
-      description: 'البحث في قاعدة البيانات الطبية PubMed (تتضمن مراجعات Cochrane)',
+      description: 'البحث في قاعدة البيانات الطبية PubMed و Cochrane',
       inputSchema: {
         type: 'object',
         properties: {
@@ -55,11 +52,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'search_openalex',
-      description: 'البحث في OpenAlex للأبحاث العلمية الأكاديمية الشاملة',
+      description: 'البحث في OpenAlex للأبحاث العلمية الأكاديمية',
       inputSchema: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'عنوان البحث أو موضوع البحث العلمى' },
+          query: { type: 'string', description: 'موضوع البحث العلمى' },
           limit: { type: 'number', description: 'عدد الأبحاث' }
         },
         required: ['query']
@@ -68,14 +65,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ]
 }));
 
-// معالجة طلبات الأدوات
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   if (name === 'send_telegram_message') {
     if (!bot) throw new Error('Telegram Bot Token غير مضبوط');
     await bot.sendMessage(args.chatId, args.message);
-    return { content: [{ type: 'text', text: `تم إرسال الرسالة بنجاح إلى ${args.chatId}` }] };
+    return { content: [{ type: 'text', text: `تم إرسال الرسالة إلى ${args.chatId}` }] };
   }
 
   if (name === 'search_pubmed') {
@@ -84,15 +80,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const searchRes = await fetch(searchUrl).then(r => r.json());
     const idList = searchRes.esearchresult?.idlist || [];
 
-    if (idList.length === 0) {
-      return { content: [{ type: 'text', text: 'لم يتم العثور على أبحاث في PubMed لهذا البحث.' }] };
-    }
+    if (idList.length === 0) return { content: [{ type: 'text', text: 'لا توجد نتائج في PubMed.' }] };
 
     const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${idList.join(',')}&retmode=json`;
     const summaryRes = await fetch(summaryUrl).then(r => r.json());
     const results = idList.map(id => {
       const item = summaryRes.result[id];
-      return `- **${item.title}**\n  المجلة: ${item.source} (${item.pubdate})\n  الرابط: https://pubmed.ncbi.nlm.nih.gov/${id}/`;
+      return `- **${item.title}** (${item.pubdate})\n  https://pubmed.ncbi.nlm.nih.gov/${id}/`;
     }).join('\n\n');
 
     return { content: [{ type: 'text', text: `نتائج PubMed:\n\n${results}` }] };
@@ -104,15 +98,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const res = await fetch(url).then(r => r.json());
     const works = res.results || [];
 
-    if (works.length === 0) {
-      return { content: [{ type: 'text', text: 'لم يتم العثور على أبحاث في OpenAlex.' }] };
-    }
+    if (works.length === 0) return { content: [{ type: 'text', text: 'لا توجد نتائج في OpenAlex.' }] };
 
-    const results = works.map(w => {
-      const year = w.publication_year || 'N/A';
-      const doi = w.doi || w.id;
-      return `- **${w.title}** (${year})\n  عدد الاستشهادات: ${w.cited_by_count}\n  الرابط: ${doi}`;
-    }).join('\n\n');
+    const results = works.map(w => `- **${w.title}** (${w.publication_year || 'N/A'})\n  الرابط: ${w.doi || w.id}`).join('\n\n');
 
     return { content: [{ type: 'text', text: `نتائج OpenAlex:\n\n${results}` }] };
   }
@@ -120,27 +108,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   throw new Error('Tool not found');
 });
 
-// إدارة الاتصال عبر SSE بمرونة عالية
-let transport = null;
+let webTransport = null;
 
 app.get('/sse', async (req, res) => {
-  transport = new SSEServerTransport('/message', res);
-  await server.connect(transport);
+  webTransport = new SSEServerTransport('/message', res);
+  await server.connect(webTransport);
 });
 
 app.post('/message', async (req, res) => {
-  if (transport) {
-    await transport.handlePostMessage(req, res);
+  if (webTransport) {
+    await webTransport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('No active SSE connection');
+    res.status(400).send('No active SSE');
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('MCP Server is Ready');
-});
+app.get('/', (req, res) => res.send('MCP Active'));
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`MCP Server running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Server on port ${PORT}`));
