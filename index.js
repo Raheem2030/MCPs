@@ -6,14 +6,12 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 
 const app = express();
 
-// إعدادات CORS لتسمح لـ Gemini Spark بالاتصال
+// إعدادات CORS وتوافق الترويسات
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
 
@@ -59,6 +57,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transports = new Map();
 
 app.get('/sse', async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
   const transport = new SSEServerTransport('/message', res);
   transports.set(transport.sessionId, transport);
   
@@ -76,7 +78,7 @@ app.post('/message', async (req, res) => {
   if (transport) {
     await transport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('No active SSE session found');
+    res.status(400).send('No active SSE session');
   }
 });
 
