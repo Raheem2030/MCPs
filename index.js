@@ -108,18 +108,28 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   throw new Error('Tool not found');
 });
 
-let webTransport = null;
+// خريطة لحفظ جميع الجلسات النشطة دون تعارض
+const transports = new Map();
 
 app.get('/sse', async (req, res) => {
-  webTransport = new SSEServerTransport('/message', res);
-  await server.connect(webTransport);
+  const transport = new SSEServerTransport('/message', res);
+  transports.set(transport.sessionId, transport);
+  
+  res.on('close', () => {
+    transports.delete(transport.sessionId);
+  });
+
+  await server.connect(transport);
 });
 
 app.post('/message', async (req, res) => {
-  if (webTransport) {
-    await webTransport.handlePostMessage(req, res);
+  const sessionId = req.query.sessionId;
+  const transport = transports.get(sessionId);
+
+  if (transport) {
+    await transport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('No active SSE');
+    res.status(400).send('Session not found');
   }
 });
 
