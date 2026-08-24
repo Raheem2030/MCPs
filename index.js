@@ -1,26 +1,13 @@
-const express = require('express');
-const TelegramBot = require('node-telegram-bot-api');
-
-const app = express();
-app.use(express.json());
-
-const token = process.env.TELEGRAM_BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: false });
-
-app.get('/', (req, res) => {
-  res.send('Telegram MCP Server is running!');
-});
-
-app.post('/mcp', (req, res) => {
-  const { chatId, message } = req.body;
-  if (chatId && message) {
-    bot.sendMessage(chatId, message);
-    return res.json({ status: 'success', sent: message });
+{
+  "name": "telegram-mcp-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.1",
+    "express": "^4.18.2",
+    "node-telegram-bot-api": "^0.64.0"
   }
-  res.status(400).json({ error: 'Missing chatId or message' });
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+}
