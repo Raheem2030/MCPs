@@ -6,7 +6,7 @@ const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontext
 
 const app = express();
 
-// إعدادات CORS وتوافق الترويسات
+// إعدادات CORS وتسهيل الاتصالات الخارجية
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -20,11 +20,13 @@ app.use(express.json());
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = token ? new TelegramBot(token, { polling: false }) : null;
 
+// تعريف خادم MCP
 const server = new Server(
-  { name: 'telegram-mcp', version: '1.0.0' },
+  { name: 'research-mcp-server', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 
+// قائمة الأدوات المتاحة
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
@@ -38,52 +40,104 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['chatId', 'message']
       }
+    },
+    {
+      name: 'search_pubmed',
+      description: 'البحث في قاعدة البيانات الطبية PubMed (تتضمن مراجعات Cochrane)',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'كلمات البحث الطبية' },
+          limit: { type: 'number', description: 'عدد النتائج' }
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'search_openalex',
+      description: 'البحث في OpenAlex للأبحاث العلمية الأكاديمية الشاملة',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'عنوان البحث أو موضوع البحث العلمى' },
+          limit: { type: 'number', description: 'عدد الأبحاث' }
+        },
+        required: ['query']
+      }
     }
   ]
 }));
 
+// معالجة طلبات الأدوات
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name === 'send_telegram_message') {
-    const { chatId, message } = request.params.arguments;
-    if (bot) {
-      await bot.sendMessage(chatId, message);
-      return { content: [{ type: 'text', text: `تم إرسال الرسالة بنجاح إلى ${chatId}` }] };
-    }
-    throw new Error('Telegram Bot Token غير مضبوط');
+  const { name, arguments: args } = request.params;
+
+  if (name === 'send_telegram_message') {
+    if (!bot) throw new Error('Telegram Bot Token غير مضبوط');
+    await bot.sendMessage(args.chatId, args.message);
+    return { content: [{ type: 'text', text: `تم إرسال الرسالة بنجاح إلى ${args.chatId}` }] };
   }
+
+  if (name === 'search_pubmed') {
+    const limit = args.limit || 5;
+    const searchUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodeURIComponent(args.query)}&retmode=json&retmax=${limit}`;
+    const searchRes = await fetch(searchUrl).then(r => r.json());
+    const idList = searchRes.esearchresult?.idlist || [];
+
+    if (idList.length === 0) {
+      return { content: [{ type: 'text', text: 'لم يتم العثور على أبحاث في PubMed لهذا البحث.' }] };
+    }
+
+    const summaryUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${idList.join(',')}&retmode=json`;
+    const summaryRes = await fetch(summaryUrl).then(r => r.json());
+    const results = idList.map(id => {
+      const item = summaryRes.result[id];
+      return `- **${item.title}**\n  المجلة: ${item.source} (${item.pubdate})\n  الرابط: https://pubmed.ncbi.nlm.nih.gov/${id}/`;
+    }).join('\n\n');
+
+    return { content: [{ type: 'text', text: `نتائج PubMed:\n\n${results}` }] };
+  }
+
+  if (name === 'search_openalex') {
+    const limit = args.limit || 5;
+    const url = `https://api.openalex.org/works?search=${encodeURIComponent(args.query)}&per-page=${limit}`;
+    const res = await fetch(url).then(r => r.json());
+    const works = res.results || [];
+
+    if (works.length === 0) {
+      return { content: [{ type: 'text', text: 'لم يتم العثور على أبحاث في OpenAlex.' }] };
+    }
+
+    const results = works.map(w => {
+      const year = w.publication_year || 'N/A';
+      const doi = w.doi || w.id;
+      return `- **${w.title}** (${year})\n  عدد الاستشهادات: ${w.cited_by_count}\n  الرابط: ${doi}`;
+    }).join('\n\n');
+
+    return { content: [{ type: 'text', text: `نتائج OpenAlex:\n\n${results}` }] };
+  }
+
   throw new Error('Tool not found');
 });
 
-const transports = new Map();
+// إدارة الاتصال عبر SSE بمرونة عالية
+let transport = null;
 
 app.get('/sse', async (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  const transport = new SSEServerTransport('/message', res);
-  transports.set(transport.sessionId, transport);
-  
-  res.on('close', () => {
-    transports.delete(transport.sessionId);
-  });
-
+  transport = new SSEServerTransport('/message', res);
   await server.connect(transport);
 });
 
 app.post('/message', async (req, res) => {
-  const sessionId = req.query.sessionId;
-  const transport = transports.get(sessionId) || Array.from(transports.values())[0];
-
   if (transport) {
     await transport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('No active SSE session');
+    res.status(400).send('No active SSE connection');
   }
 });
 
 app.get('/', (req, res) => {
-  res.send('Telegram MCP Server is Running');
+  res.send('MCP Server is Ready');
 });
 
 const PORT = process.env.PORT || 3000;
