@@ -112,8 +112,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transports = new Map();
 
 app.get('/sse', async (req, res) => {
-  const transport = new SSEServerTransport('/message', res);
-  transports.set(transport.sessionId, transport);
+const transport = new SSEServerTransport('https://core-b1tm.onrender.com/message', res);  transports.set(transport.sessionId, transport);
   
   res.on('close', () => {
     transports.delete(transport.sessionId);
