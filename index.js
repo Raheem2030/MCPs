@@ -5,7 +5,7 @@ const app = express();
 app.use(express.json());
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+const bot = new TelegramBot(token, { polling: false });
 
 app.get('/', (req, res) => {
   res.send('Telegram MCP Server is running!');
