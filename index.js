@@ -5,6 +5,18 @@ const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js'
 const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontextprotocol/sdk/types.js');
 
 const app = express();
+
+// إعدادات CORS لتسمح لـ Gemini Spark بالاتصال
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json());
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -44,18 +56,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   throw new Error('Tool not found');
 });
 
-let transport;
+const transports = new Map();
 
 app.get('/sse', async (req, res) => {
-  transport = new SSEServerTransport('/message', res);
+  const transport = new SSEServerTransport('/message', res);
+  transports.set(transport.sessionId, transport);
+  
+  res.on('close', () => {
+    transports.delete(transport.sessionId);
+  });
+
   await server.connect(transport);
 });
 
 app.post('/message', async (req, res) => {
+  const sessionId = req.query.sessionId;
+  const transport = transports.get(sessionId) || Array.from(transports.values())[0];
+
   if (transport) {
     await transport.handlePostMessage(req, res);
   } else {
-    res.status(400).send('No active SSE connection');
+    res.status(400).send('No active SSE session found');
   }
 });
 
